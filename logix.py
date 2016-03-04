@@ -41,6 +41,12 @@ class Camion(object):
 
         self.manipulado = entorno.event()
 
+    def __str__(self):
+        return str(self.nombre) + self.tipo[0]
+
+    def __repr__(self):
+        return str(self.nombre) + self.tipo[0]
+
     @staticmethod
     def llega_a_instalacion(entorno):
         """
@@ -50,7 +56,7 @@ class Camion(object):
         """
         tell = random.uniform(1, 2)  # TODO Modificar con información real
 
-        yield entorno.timeout(round(tell, 0))
+        yield entorno.timeout(int(round(tell, 0)))
 
     def espera(self, entorno, tespera):
         """
@@ -131,54 +137,81 @@ class Camion(object):
 
             entorno.exit(resultado_espera)
 
-    def espera_producto(self, entorno, operacion, medio_de_origen_o_destino, tpaciencia_p):
+    def espera_operacion(self, entorno, operacion, medio_de_origen_o_destino, tpaciencia_r, tpaciencia_p):
 
+        tpaciencia_t = tpaciencia_p + tpaciencia_r
         espera_p = 0
+        espera_r = 0
+        c_adelantado = None
 
         if self.tipo == "Carga":
 
-            operacion.recurso.camiones_esperando_carga.append(self.nombre)
+            operacion.recurso.camiones_esperando_carga.append(self)
 
-            while espera_p < tpaciencia_p:
-                if self.nombre == 19:
-                    print "WTF!!" + str(operacion.recurso.camiones_esperando_carga[0])
+            while (espera_r + espera_p) < tpaciencia_t:
 
-                if medio_de_origen_o_destino.level >= 28 \
-                        and self.nombre in operacion.recurso.camiones_esperando_carga[0:operacion.recurso.capacity]:
-                    print str(self.nombre) + " deja espera " + str(entorno.now)
-                    break
+                if self in operacion.recurso.camiones_esperando_carga[0:operacion.recurso.capacity]:
+                    if medio_de_origen_o_destino.level >= 28:
+                        break
+                    else:
+                        if any(c.tipo == "Descarga" for c in operacion.recurso.camiones_esperando_carga) \
+                                and c_adelantado is None:
+                            c_adelantado = \
+                                [ca for ca in operacion.recurso.camiones_esperando_carga if ca.tipo == "Descarga"][0]
+                            operacion.recurso.camiones_esperando_carga.remove(c_adelantado)
+                            operacion.recurso.camiones_esperando_carga = \
+                                [c_adelantado] + operacion.recurso.camiones_esperando_carga
+                        espera_p += 1
+                else:
+                    espera_r += 1
                 yield entorno.timeout(1)
-                espera_p += 1
 
-            if medio_de_origen_o_destino.level >= 28 and espera_p <= tpaciencia_p and self.nombre in \
-                    operacion.recurso.camiones_esperando_carga[0:operacion.recurso.capacity]:
-                entorno.exit(["Inicia", espera_p])
+            if medio_de_origen_o_destino.level >= 28 and (espera_r + espera_p) <= tpaciencia_t \
+                    and self in operacion.recurso.camiones_esperando_carga[0:operacion.recurso.capacity]:
+
+                entorno.exit(["Inicia", espera_r, espera_p])
                 print str(self.nombre) + " Inicia " + str(entorno.now)
+
             else:
-                entorno.exit(["No inicia", espera_p])
+                entorno.exit(["No inicia", espera_r, espera_p])
 
         else:
 
             espacio = medio_de_origen_o_destino.capacity - medio_de_origen_o_destino.level
-            operacion.recurso.camiones_esperando_carga.append(self.nombre)
 
-            while espera_p < tpaciencia_p:
+            operacion.recurso.camiones_esperando_carga.append(self)
 
-                if espacio >= 28 and self.nombre in operacion.recurso.camiones_esperando_carga[
-                                                    0:operacion.recurso.capacity]:
-                    print str(self.nombre) + " deja espera " + str(entorno.now)
-                    break
+            while (espera_r + espera_p) < tpaciencia_t:
+
+                if self in operacion.recurso.camiones_esperando_carga[0:operacion.recurso.capacity]:
+
+                    if espacio >= 28:
+                        break
+                    else:
+                        if any(c.tipo == "Carga" for c in operacion.recurso.camiones_esperando_carga) \
+                                and c_adelantado in None:
+                            c_adelantado = \
+                                [ca for ca in operacion.recurso.camiones_esperando_carga if ca.tipo == "Carga"][0]
+                            operacion.recurso.camiones_esperando_carga.remove(c_adelantado)
+                            operacion.recurso.camiones_esperando_carga = \
+                                [c_adelantado] + operacion.recurso.camiones_esperando_carga
+                        espera_p += 1
+                else:
+                    espera_r += 1
+
                 yield entorno.timeout(1)
-                espera_p += 1
                 espacio = medio_de_origen_o_destino.capacity - medio_de_origen_o_destino.level
 
-            if espacio >= 28 and espera_p <= tpaciencia_p \
-                    and self.nombre in operacion.recurso.camiones_esperando_carga[0:operacion.recurso.capacity]:
-                entorno.exit(["Inicia", espera_p])
+            if espacio >= 28 and (espera_r + espera_p) <= tpaciencia_t \
+                    and self in operacion.recurso.camiones_esperando_carga[0:operacion.recurso.capacity]:
+
+                entorno.exit(["Inicia", espera_r, espera_p])
                 print operacion.recurso.camiones_esperando_carga
                 print str(self.nombre) + " Inicia " + str(entorno.now)
+
             else:
-                entorno.exit(["No inicia", espera_p])
+
+                entorno.exit(["No inicia", espera_r, espera_p])
 
 
 class Operacion(object):
@@ -199,8 +232,6 @@ class Operacion(object):
         self.ts_distrib = ts_distrib
         self.parametros = parametros
         self.datos = datos
-        # self.camiones_c_esperando_carga = []
-        # self.camiones_d_esperando_carga = []
 
     def tiempo_de_servicio(self):  # TODO Incluir distribuciones de probabilidad
         """Genera el tiempo de servicio de la operación"""
@@ -212,7 +243,7 @@ class Operacion(object):
         else:
             print "Error, distribución no reconocida"
             ts = None
-        return round(ts, 0)
+        return int(round(ts, 0))
 
     def ejecutar(self, entorno, camion, tpaciencia_r=None, tpaciencia_p=None, medio_de_origen_o_destino=None):
         """
@@ -267,25 +298,28 @@ class OperacionManipuleo(Operacion):
 
             arribo = entorno.now
             print str(camion.nombre) + " arribo a op en " + str(arribo)
-
+            print self.recurso.camiones_esperando_carga
             espera_producto = yield entorno.process(
-                camion.espera_producto(entorno, self, medio_de_origen_o_destino, tpaciencia_p))
+                camion.espera_operacion(entorno, self, medio_de_origen_o_destino, tpaciencia_r, tpaciencia_p))
 
             print str(camion.nombre) + " " + espera_producto[0]
+
             if espera_producto[0] == "Inicia":
 
-                espera_p = espera_producto[1]
+                espera_r = espera_producto[1]
+                espera_p = espera_producto[2]
 
                 with self.recurso.request() as turno:
 
                     ingreso = entorno.now
 
-                    yield turno | entorno.timeout(tpaciencia_r)
+                    yield turno
+                    # | entorno.timeout(tpaciencia_r)
 
                     if turno.triggered:
                         inicio = entorno.now
                         print str(camion.nombre) + " inicio en " + str(inicio)
-                        espera_r = inicio - ingreso
+                        # espera_r = inicio - ingreso
                         ts = self.tiempo_de_servicio()
                         print str(camion.nombre) + " ts=" + str(ts)
                         atencion = entorno.timeout(ts)
@@ -297,13 +331,13 @@ class OperacionManipuleo(Operacion):
                         else:
                             medio_de_origen_o_destino.put(camion.peso) & camion.trailer.get(camion.peso)
 
-                        if len(self.recurso.camiones_esperando_carga) != 0 and camion.nombre in \
-                                self.recurso.camiones_esperando_carga[0:self.recurso.capacity]:
-                            self.recurso.camiones_esperando_carga.remove(camion.nombre)
+                        if len(self.recurso.camiones_esperando_carga) != 0 and camion in \
+                                self.recurso.camiones_esperando_carga:
+                            self.recurso.camiones_esperando_carga.remove(camion)
                             print str(camion.nombre) + " SALE DE COLA EN " + str(entorno.now)
-                        elif len(self.recurso.camiones_esperando_carga) != 0 and camion.nombre in \
-                                self.recurso.camiones_esperando_carga[0:self.recurso.capacity]:
-                            self.recurso.camiones_esperando_carga.remove(camion.nombre)
+                        elif len(self.recurso.camiones_esperando_carga) != 0 and camion in \
+                                self.recurso.camiones_esperando_carga:
+                            self.recurso.camiones_esperando_carga.remove(camion)
                             print str(camion.nombre) + " SALE DE COLA EN " + str(entorno.now)
 
                         camion.peso = camion.trailer.level
@@ -316,7 +350,6 @@ class OperacionManipuleo(Operacion):
                                          medio_de_origen_o_destino.nombre, medio_de_origen_o_destino.level]
                         self.datos.append(fila_de_datos)
 
-                        # print fila_de_datos
                         entorno.exit("Ejecutada")
 
                     else:
@@ -327,12 +360,12 @@ class OperacionManipuleo(Operacion):
 
             else:
 
-                if len(self.recurso.camiones_esperando_carga) != 0 and camion.nombre in \
+                if len(self.recurso.camiones_esperando_carga) != 0 and camion in \
                         self.recurso.camiones_esperando_carga:
-                    self.recurso.camiones_esperando_carga.remove(camion.nombre)
-                elif len(self.recurso.camiones_esperando_carga) != 0 and camion.nombre in \
+                    self.recurso.camiones_esperando_carga.remove(camion)
+                elif len(self.recurso.camiones_esperando_carga) != 0 and camion in \
                         self.recurso.camiones_esperando_carga:
-                    self.recurso.camiones_esperando_carga.remove(camion.nombre)
+                    self.recurso.camiones_esperando_carga.remove(camion)
 
                 print "%d %s %s %s NO EJECUTADA POR PRODUCTO" % (camion.nombre, camion.tipo, self.nombre, camion.carga)
                 print medio_de_origen_o_destino.nombre + " " + str(medio_de_origen_o_destino.level)
@@ -653,13 +686,13 @@ def manipular_contedenor(entorno, camion, operaciones, recursos):
     if camion.tipo == "Carga":
 
         carga = operaciones["Carga con grua"]
-        yield entorno.process(carga.ejecutar(entorno, camion, 100, 100, recursos["Patio de Contenedores"]))
+        yield entorno.process(carga.ejecutar(entorno, camion, 100, 200, recursos["Patio de Contenedores"]))
 
     # Manipuleo de camiones por descargar
     elif camion.tipo == "Descarga":
 
         descarga = operaciones["Descarga con grua"]
-        yield entorno.process(descarga.ejecutar(entorno, camion, 100, 100, recursos["Patio de Contenedores"]))
+        yield entorno.process(descarga.ejecutar(entorno, camion, 100, 200, recursos["Patio de Contenedores"]))
 
 
 def manipular_carga_general(entorno, camion, operaciones, listas_de_espera):
@@ -780,7 +813,7 @@ def principal():
         "Tolva":
             MedioDeAlmacenamiento(env, "Tolva", 400),
         "Almacen 1":
-            MedioDeAlmacenamiento(env, "Almacen 1", 2500, 200),
+            MedioDeAlmacenamiento(env, "Almacen 1", 2500),
         "Almacen 2":
             MedioDeAlmacenamiento(env, "Almacen 2", 1500),
         "Almacen Ext":
@@ -790,7 +823,7 @@ def principal():
         "Tanque 2":
             MedioDeAlmacenamiento(env, "Tanque 2", 500),
         "Patio de Contenedores":
-            MedioDeAlmacenamiento(env, "Patio de Contenedores", 2500, 500)}
+            MedioDeAlmacenamiento(env, "Patio de Contenedores", 2500)}
 
     # cabinas_recepcion = simpy.FilterStore(env, 2)
     # cabinas_despacho = simpy.FilterStore(env, 2)
