@@ -22,8 +22,8 @@ class Camion(object):
         :type entorno: simpy.Environment
         :type nombre: int
         """
-        productos = ["Harina de Soya - Hi Pro", "Harina de Soya - Full Fat", "Torta de Soya",
-                     "Torta de Girasol", "Aceite de Soya", "Pellet de Soya", "Grano de Soya",
+        productos = ["Harina de Soya - Hi Pro/Pellet de Soya", "Harina de Soya - Full Fat", "Torta de Soya",
+                     "Torta de Girasol", "Aceite de Soya", "Grano de Soya",
                      "Azucar", "Fierro", "Contenedor 20", "Contenedor 40"]
 
         self.nombre = nombre
@@ -37,15 +37,68 @@ class Camion(object):
             self.peso = 0
             self.tipo = "Carga"
 
-        self.trailer = MedioDeAlmacenamiento(entorno, str(self.nombre), 28, self.peso)
+        niveles = {self.carga: self.peso}
+
+        self.trailer = MedioDeAlmacenamiento(entorno, str(self.nombre), niveles, 28, self.peso)
 
         self.manipulado = entorno.event()
 
     def __str__(self):
-        return str(self.nombre) + self.tipo[0]
+
+        cod = ""
+
+        if self.carga == "Harina de Soya - Hi Pro/Pellet de Soya":
+            cod = "HP"
+        elif self.carga == "Harina de Soya - Full Fat":
+            cod = "FF"
+        elif self.carga == "Torta de Soya":
+            cod = "TS"
+        elif self.carga == "Torta de Girasol":
+            cod = "TS"
+        elif self.carga == "Aceite de Soya":
+            cod = "AS"
+        elif self.carga == "Grano de Soya":
+            cod = "GS"
+        elif self.carga == "Azucar":
+            cod = "AZ"
+        elif self.carga == "Fierro":
+            cod = "FI"
+        elif self.carga == "Contenedor 20":
+            cod = "C2"
+        elif self.carga == "Contenedor 40":
+            cod = "C4"
+        else:
+            print "WTF!!"
+
+        return str(self.nombre) + self.tipo[0] + cod
 
     def __repr__(self):
-        return str(self.nombre) + self.tipo[0]
+        cod = ""
+
+        if self.carga == "Harina de Soya - Hi Pro/Pellet de Soya":
+            cod = "HP"
+        elif self.carga == "Harina de Soya - Full Fat":
+            cod = "FF"
+        elif self.carga == "Torta de Soya":
+            cod = "TS"
+        elif self.carga == "Torta de Girasol":
+            cod = "TS"
+        elif self.carga == "Aceite de Soya":
+            cod = "AS"
+        elif self.carga == "Grano de Soya":
+            cod = "GS"
+        elif self.carga == "Azucar":
+            cod = "AZ"
+        elif self.carga == "Fierro":
+            cod = "FI"
+        elif self.carga == "Contenedor 20":
+            cod = "C2"
+        elif self.carga == "Contenedor 40":
+            cod = "C4"
+        else:
+            print "WTF!!"
+
+        return str(self.nombre) + self.tipo[0] + cod
 
     @staticmethod
     def llega_a_instalacion(entorno):
@@ -151,13 +204,14 @@ class Camion(object):
             while (espera_r + espera_p) < tpaciencia_t:
 
                 if self in operacion.recurso.camiones_esperando_carga[0:operacion.recurso.capacity]:
-                    if medio_de_origen_o_destino.level >= 28:
+
+                    if medio_de_origen_o_destino.niveles[self.carga] >= 28:
                         break
                     else:
                         if any(c.tipo == "Descarga" for c in operacion.recurso.camiones_esperando_carga) \
                                 and c_adelantado is None:
-                            c_adelantado = \
-                                [ca for ca in operacion.recurso.camiones_esperando_carga if ca.tipo == "Descarga"][0]
+                            c_adelantado = [ca for ca in operacion.recurso.camiones_esperando_carga
+                                            if ca.tipo == "Descarga"][0]
                             operacion.recurso.camiones_esperando_carga.remove(c_adelantado)
                             operacion.recurso.camiones_esperando_carga = \
                                 [c_adelantado] + operacion.recurso.camiones_esperando_carga
@@ -166,14 +220,17 @@ class Camion(object):
                     espera_r += 1
                 yield entorno.timeout(1)
 
-            if medio_de_origen_o_destino.level >= 28 and (espera_r + espera_p) <= tpaciencia_t \
+            if medio_de_origen_o_destino.niveles[self.carga] >= 28 and (espera_r + espera_p) <= tpaciencia_t \
                     and self in operacion.recurso.camiones_esperando_carga[0:operacion.recurso.capacity]:
 
                 entorno.exit(["Inicia", espera_r, espera_p])
+                print operacion.recurso.camiones_esperando_carga
                 print str(self.nombre) + " Inicia " + str(entorno.now)
 
             else:
                 entorno.exit(["No inicia", espera_r, espera_p])
+                print operacion.recurso.camiones_esperando_carga
+                print str(self.nombre) + "No Inicia " + str(entorno.now)
 
         else:
 
@@ -212,6 +269,8 @@ class Camion(object):
             else:
 
                 entorno.exit(["No inicia", espera_r, espera_p])
+                print operacion.recurso.camiones_esperando_carga
+                print str(self.nombre) + "No Inicia " + str(entorno.now)
 
 
 class Operacion(object):
@@ -311,15 +370,13 @@ class OperacionManipuleo(Operacion):
 
                 with self.recurso.request() as turno:
 
-                    ingreso = entorno.now
+                    ingreso = entorno.now - espera_p
 
                     yield turno
-                    # | entorno.timeout(tpaciencia_r)
 
                     if turno.triggered:
                         inicio = entorno.now
                         print str(camion.nombre) + " inicio en " + str(inicio)
-                        # espera_r = inicio - ingreso
                         ts = self.tiempo_de_servicio()
                         print str(camion.nombre) + " ts=" + str(ts)
                         atencion = entorno.timeout(ts)
@@ -327,18 +384,13 @@ class OperacionManipuleo(Operacion):
                         yield atencion
 
                         if camion.tipo == "Carga":
-                            medio_de_origen_o_destino.get(28) & camion.trailer.put(28)
-                        else:
-                            medio_de_origen_o_destino.put(camion.peso) & camion.trailer.get(camion.peso)
+                            medio_de_origen_o_destino.cargar_producto(camion, camion.carga)
 
-                        if len(self.recurso.camiones_esperando_carga) != 0 and camion in \
-                                self.recurso.camiones_esperando_carga:
-                            self.recurso.camiones_esperando_carga.remove(camion)
-                            print str(camion.nombre) + " SALE DE COLA EN " + str(entorno.now)
-                        elif len(self.recurso.camiones_esperando_carga) != 0 and camion in \
-                                self.recurso.camiones_esperando_carga:
-                            self.recurso.camiones_esperando_carga.remove(camion)
-                            print str(camion.nombre) + " SALE DE COLA EN " + str(entorno.now)
+                        else:
+                            medio_de_origen_o_destino.descargar_producto(camion, camion.carga)
+
+                        self.recurso.camiones_esperando_carga.remove(camion)
+                        print str(camion.nombre) + " SALE DE COLA EN " + str(entorno.now)
 
                         camion.peso = camion.trailer.level
 
@@ -347,7 +399,8 @@ class OperacionManipuleo(Operacion):
 
                         fila_de_datos = [camion.nombre, camion.carga, camion.tipo, camion.peso, self.nombre,
                                          arribo, espera_r, ingreso, espera_p, inicio, salida,
-                                         medio_de_origen_o_destino.nombre, medio_de_origen_o_destino.level]
+                                         medio_de_origen_o_destino.nombre,
+                                         medio_de_origen_o_destino.niveles[camion.carga]]
                         self.datos.append(fila_de_datos)
 
                         entorno.exit("Ejecutada")
@@ -360,15 +413,10 @@ class OperacionManipuleo(Operacion):
 
             else:
 
-                if len(self.recurso.camiones_esperando_carga) != 0 and camion in \
-                        self.recurso.camiones_esperando_carga:
-                    self.recurso.camiones_esperando_carga.remove(camion)
-                elif len(self.recurso.camiones_esperando_carga) != 0 and camion in \
-                        self.recurso.camiones_esperando_carga:
-                    self.recurso.camiones_esperando_carga.remove(camion)
-
+                self.recurso.camiones_esperando_carga.remove(camion)
+                print str(camion.nombre) + " SALE DE COLA EN " + str(entorno.now)
                 print "%d %s %s %s NO EJECUTADA POR PRODUCTO" % (camion.nombre, camion.tipo, self.nombre, camion.carga)
-                print medio_de_origen_o_destino.nombre + " " + str(medio_de_origen_o_destino.level)
+                print medio_de_origen_o_destino.nombre + " " + str(medio_de_origen_o_destino.niveles[camion.carga])
                 entorno.exit("No ejecutada por producto")
 
         else:
@@ -382,7 +430,7 @@ class Recurso(simpy.Resource):
 
 
 class MedioDeAlmacenamiento(simpy.Container):
-    def __init__(self, env, nombre, capacity=float('inf'), init=0):
+    def __init__(self, env, nombre, niveles=None, capacity=float('inf'), init=0):
         """
         Define las caracteristicas del medio de almacenamiento
 
@@ -390,6 +438,24 @@ class MedioDeAlmacenamiento(simpy.Container):
         """
         super(MedioDeAlmacenamiento, self).__init__(env, capacity, init)
         self.nombre = nombre
+        if niveles is not None:
+            self.niveles = niveles
+            if sum(self.niveles.values()) > 0:
+                self.get(sum(self.niveles.values()))
+
+    def cargar_producto(self, camion, producto):
+        if self.niveles[producto] >= 28:
+            self.get(28) & camion.trailer.put(28)
+            self.niveles[producto] -= 28
+        else:
+            print "****ERROR EN CARGA, PRODUCTO NO DISPONIBLE****"
+
+    def descargar_producto(self, camion, producto):
+        if (self.capacity - self.level) >= 28:
+            self.put(camion.peso) & camion.trailer.get(camion.peso)
+            self.niveles[producto] += 28
+        else:
+            print "****ERROR DESCARGA, ESPACIO NO DISPONIBLE****"
 
 
 def generar_camiones(entorno, operaciones, recursos):
@@ -402,7 +468,7 @@ def generar_camiones(entorno, operaciones, recursos):
     """
 
     camiones = {
-        "Harina de Soya - Hi Pro":
+        "Harina de Soya - Hi Pro/Pellet de Soya":
             {"Descarga": [], "Carga": []},
         "Harina de Soya - Full Fat":
             {"Descarga": [], "Carga": []},
@@ -412,8 +478,8 @@ def generar_camiones(entorno, operaciones, recursos):
             {"Descarga": [], "Carga": []},
         "Aceite de Soya":
             {"Descarga": [], "Carga": []},
-        "Pellet de Soya":
-            {"Descarga": [], "Carga": []},
+        # "Pellet de Soya":
+        #     {"Descarga": [], "Carga": []},
         "Grano de Soya":
             {"Descarga": [], "Carga": []},
         "Azucar":
@@ -426,7 +492,7 @@ def generar_camiones(entorno, operaciones, recursos):
             {"Descarga": [], "Carga": []}}
 
     listas_de_espera = {
-        "Harina de Soya - Hi Pro":
+        "Harina de Soya - Hi Pro/Pellet de Soya":
             {"Descarga": [], "Carga": []},
         "Harina de Soya - Full Fat":
             {"Descarga": [], "Carga": []},
@@ -436,8 +502,8 @@ def generar_camiones(entorno, operaciones, recursos):
             {"Descarga": [], "Carga": []},
         "Aceite de Soya":
             {"Descarga": [], "Carga": []},
-        "Pellet de Soya":
-            {"Descarga": [], "Carga": []},
+        # "Pellet de Soya":
+        #   {"Descarga": [], "Carga": []},
         "Grano de Soya":
             {"Descarga": [], "Carga": []},
         "Azucar":
@@ -487,7 +553,7 @@ def atender_camion(entorno, camion, operaciones, listas_de_espera, recursos):
 
 
 def atencion_manipuleo(entorno, camion, operaciones, listas_de_espera, recursos):
-    if camion.carga in ["Harina de Soya - Hi Pro", "Pellet de Soya", "Grano de Soya"]:
+    if camion.carga in ["Harina de Soya - Hi Pro/Pellet de Soya", "Grano de Soya"]:
 
         yield entorno.process(manipular_granos(
             entorno, camion, operaciones, listas_de_espera, recursos))
@@ -518,7 +584,7 @@ def manipular_granos(entorno, camion, operaciones, listas_de_espera, recursos):
     if camion.tipo == "Carga":
 
         # Manipuleo de carga a granel seca en almacenes propios
-        if camion.carga in ["Harina de Soya - Hi Pro", "Pellet de Soya"]:
+        if camion.carga in ["Harina de Soya - Hi Pro/Pellet de Soya"]:
 
             # Se carga a partir de un transbordo en sistema mecanizado
             transbordo = operaciones["Transbordo en sistema mecanizado (C)"]
@@ -583,7 +649,7 @@ def manipular_granos(entorno, camion, operaciones, listas_de_espera, recursos):
     elif camion.tipo == "Descarga":
 
         # Manipuleo de carga a granel en almacenes propios
-        if camion.carga in ["Pellet de Soya", "Harina de Soya - Hi Pro"]:
+        if camion.carga in ["Harina de Soya - Hi Pro/Pellet de Soya"]:
 
             # Se descarga a partir de un transbordo en sistema mecanizado
             transbordo = operaciones["Transbordo en sistema mecanizado (D)"]
@@ -788,7 +854,16 @@ def principal():
     env = simpy.Environment()
 
     datos = []
+
     # Definición de Recursos
+    niv_tolva = {"Harina de Soya - Hi Pro/Pellet de Soya": 0}
+    niv_almacen_1 = {"Harina de Soya - Hi Pro/Pellet de Soya": 500}
+    niv_almacen_2 = {"Harina de Soya - Full Fat": 0, "Torta de Soya": 0, "Torta de Girasol": 0, "Azucar": 0}
+    niv_almacen_ext = {"Grano de Soya": 0}
+    niv_tanque_1 = {"Aceite de Soya": 0}
+    niv_tanque_2 = {"Aceite de Soya": 0}
+    niv_patio_cont = {"Contenedor 20": 0, "Contenedor 40": 0}
+
     recursos = {
         "Ventanilla Recepcion":
             Recurso(env, capacity=1),
@@ -811,19 +886,19 @@ def principal():
         "Grua":
             Recurso(env, capacity=1),
         "Tolva":
-            MedioDeAlmacenamiento(env, "Tolva", 400),
+            MedioDeAlmacenamiento(env, "Tolva", niv_tolva, 400),
         "Almacen 1":
-            MedioDeAlmacenamiento(env, "Almacen 1", 2500),
+            MedioDeAlmacenamiento(env, "Almacen 1", niv_almacen_1, 2500),
         "Almacen 2":
-            MedioDeAlmacenamiento(env, "Almacen 2", 1500),
+            MedioDeAlmacenamiento(env, "Almacen 2", niv_almacen_2, 1500),
         "Almacen Ext":
-            MedioDeAlmacenamiento(env, "Almacen Ext", 1500),
+            MedioDeAlmacenamiento(env, "Almacen Ext", niv_almacen_ext, 1500),
         "Tanque 1":
-            MedioDeAlmacenamiento(env, "Tanque 1", 400),
+            MedioDeAlmacenamiento(env, "Tanque 1", niv_tanque_1, 400),
         "Tanque 2":
-            MedioDeAlmacenamiento(env, "Tanque 2", 500),
+            MedioDeAlmacenamiento(env, "Tanque 2", niv_tanque_2, 500),
         "Patio de Contenedores":
-            MedioDeAlmacenamiento(env, "Patio de Contenedores", 2500)}
+            MedioDeAlmacenamiento(env, "Patio de Contenedores", niv_patio_cont, 2500)}
 
     # cabinas_recepcion = simpy.FilterStore(env, 2)
     # cabinas_despacho = simpy.FilterStore(env, 2)
