@@ -581,7 +581,7 @@ class Sistema(simpy.Environment):
         print('Simulación de Operaciones Logísticas en ALPASUR S.A. - KEMFA S.A.')
 
         tsim = 10 * 60  # Tiempo de simulación
-        random.seed(55)
+        random.seed(56)
         self.process(self.generar_camiones(self.operaciones, self.recursos))
         self.run(until=tsim)  # Simulación
 
@@ -623,6 +623,7 @@ class Camion(object):
 
         self.manipulado = entorno.event()
         self.transbordo = "No"
+        self.estado = ""
 
     def __str__(self):
 
@@ -797,32 +798,40 @@ class Camion(object):
 
         if self.tipo == "Carga":
 
-            # operacion.recurso.camiones_esperando_carga.append(self)
-
             while (espera_r + espera_p) < tpaciencia_t:
 
                 if self in operacion.recurso.camiones_esperando_carga[0:operacion.recurso.capacity]:
 
-                    if medio_de_origen_o_destino.niveles[self.carga] >= 28:
+                    num_c_iguales = sum(1 for c in operacion.recurso.camiones_esperando_carga[
+                                                   0:operacion.recurso.camiones_esperando_carga.index(self)]
+                                        if c.carga == self.carga and c.tipo == self.tipo and c.transbordo == "No")
+
+                    if self.transbordo == "Si" \
+                            or (medio_de_origen_o_destino.niveles[self.carga] >= 28 * (1 + num_c_iguales)):
+
+                        self.estado = "En proceso"  # TODO Mover a operacion
                         break
+
                     else:
 
-                        if any(c.tipo == "Descarga" and c.carga == self.carga
-                               for c in operacion.recurso.camiones_esperando_carga) \
+                        if any(c.verifica_almacenes(entorno.recursos)
+                               for c in operacion.recurso.camiones_esperando_carga[
+                                        operacion.recurso.camiones_esperando_carga.index(self) + 1:]) \
                                 and c_adelantado is None:
-                            c_adelantado = [ca for ca in operacion.recurso.camiones_esperando_carga
-                                            if ca.tipo == "Descarga" and ca.carga == self.carga][0]
-                            operacion.recurso.camiones_esperando_carga.remove(c_adelantado)
-                            operacion.recurso.camiones_esperando_carga = \
-                                [c_adelantado] + operacion.recurso.camiones_esperando_carga
-                            print str(c_adelantado) + " adelantado bajo criterio de " + str(self) + " " + str(
-                                entorno.now)
-                            print "\tEn sistema: " + str(operacion.recurso.camiones_esperando_carga) + " Hora: " + str(
-                                entorno.now)
+                            c_adelantado = [ca for ca in operacion.recurso.camiones_esperando_carga[
+                                                         operacion.recurso.camiones_esperando_carga.index(self) + 1:]
+                                            if ca.verifica_almacenes(entorno.recursos)][0]
+
+                            self.adelanta_camion(entorno, operacion, c_adelantado)
+
                             c_adelantado = None
+
+                        self.estado = "Espera prod/esp"
                         espera_p += 1
                 else:
+                    self.estado = "Espera recurso"
                     espera_r += 1
+
                 yield entorno.timeout(1)
 
             if medio_de_origen_o_destino.niveles[self.carga] >= 28 and (espera_r + espera_p) <= tpaciencia_t \
@@ -833,6 +842,7 @@ class Camion(object):
                 print "\tEn sistema: " + str(operacion.recurso.camiones_esperando_carga)
 
             else:
+
                 entorno.exit(["No inicia", espera_r, espera_p])
                 print operacion.recurso.camiones_esperando_carga
                 print str(self.nombre) + "No Inicia " + str(entorno.now)
@@ -841,29 +851,40 @@ class Camion(object):
 
             espacio = medio_de_origen_o_destino.capacity - medio_de_origen_o_destino.level
 
-            # operacion.recurso.camiones_esperando_carga.append(self)
-
             while (espera_r + espera_p) < tpaciencia_t:
 
                 if self in operacion.recurso.camiones_esperando_carga[0:operacion.recurso.capacity]:
 
-                    if espacio >= 28:
+                    num_c_iguales = sum(1 for c in operacion.recurso.camiones_esperando_carga[
+                                                   0:operacion.recurso.camiones_esperando_carga.index(self)]
+                                        if c.tipo == self.tipo and c.transbordo == "No")
+
+                    if self.transbordo == "Si" \
+                            or (espacio >= 28 * (1 + num_c_iguales)):
+
+                        self.estado = "En proceso"  # TODO Mover a operacion
                         break
+
                     else:
-                        if any(c.tipo == "Carga" and c.carga == self.carga
-                               for c in operacion.recurso.camiones_esperando_carga) \
-                                and c_adelantado in None:
+
+                        if any(c.verifica_almacenes(entorno.recursos)
+                               for c in operacion.recurso.camiones_esperando_carga[
+                                        operacion.recurso.camiones_esperando_carga.index(self) + 1:]) \
+                                and c_adelantado is None:
                             c_adelantado = \
-                                [ca for ca in operacion.recurso.camiones_esperando_carga
-                                 if ca.tipo == "Carga" and ca.carga == self.carga][0]
-                            operacion.recurso.camiones_esperando_carga.remove(c_adelantado)
-                            operacion.recurso.camiones_esperando_carga = \
-                                [c_adelantado] + operacion.recurso.camiones_esperando_carga
-                            print operacion.recurso.camiones_esperando_carga
-                            print str(c_adelantado) + " adelantado"
+                                [ca for ca in operacion.recurso.camiones_esperando_carga[
+                                              operacion.recurso.camiones_esperando_carga.index(self) + 1:]
+                                 if ca.verifica_almacenes(entorno.recursos)][0]
+
+                            self.adelanta_camion(entorno, operacion, c_adelantado)
+
                             c_adelantado = None
+
+                        self.estado = "Espera prod/esp"
                         espera_p += 1
                 else:
+
+                    self.estado = "Espera recurso"
                     espera_r += 1
 
                 yield entorno.timeout(1)
@@ -888,27 +909,36 @@ class Camion(object):
         :type operacion: Operacion
         :type entorno: Sistema
         """
-        primer_camion_en_cola = operacion.recurso.camiones_esperando_carga[0]
 
-        prod_o_esp_disp_primer_camion_en_cola = primer_camion_en_cola.verifica_almacenes(entorno.recursos)
+        primeros_camiones_en_cola = operacion.recurso.camiones_esperando_carga[0:operacion.recurso.capacity]
 
-        if primer_camion_en_cola.transbordo == "Si":
-            pass
+        prod_o_esp_disp_primeros_camiones_en_cola = all(camion.verifica_almacenes(entorno.recursos)
+                                                        for camion in primeros_camiones_en_cola)
 
-        elif self.tipo == "Descarga" and medio_de_origen_o_destino.capacity - medio_de_origen_o_destino.level >= 28 \
-                and not prod_o_esp_disp_primer_camion_en_cola:
+        t_estaciones_disp = operacion.recurso.capacity - operacion.recurso.count
 
-            primer_camion_en_cola.adelanta_camion(entorno, operacion, self)
+        # if primer_camion_en_cola.transbordo == "Si":
+        #    pass
+
+        if self.tipo == "Descarga" and medio_de_origen_o_destino.capacity - medio_de_origen_o_destino.level >= 28 \
+                and not prod_o_esp_disp_primeros_camiones_en_cola:
+
+            for camion in primeros_camiones_en_cola:
+                if camion.verifica_almacenes(entorno.recursos):
+                    print camion
+            primeros_camiones_en_cola[operacion.recurso.capacity - t_estaciones_disp].adelanta_camion(
+                entorno, operacion, self)
 
         elif self.tipo == "Carga" and medio_de_origen_o_destino.niveles[self.carga] >= 28 and \
-                not prod_o_esp_disp_primer_camion_en_cola:
-
-            primer_camion_en_cola.adelanta_camion(entorno, operacion, self)
+                not prod_o_esp_disp_primeros_camiones_en_cola:
+            primeros_camiones_en_cola[operacion.recurso.capacity - t_estaciones_disp].adelanta_camion(
+                entorno, operacion, self)
 
         elif operacion.nombre in ["Transbordo a pulso - Sacos", "Transbordo a pulso - Granos", "Transbordo con grua"] \
-                and not prod_o_esp_disp_primer_camion_en_cola:
+                and not prod_o_esp_disp_primeros_camiones_en_cola:
 
-            primer_camion_en_cola.adelanta_camion(entorno, operacion, self)
+            primeros_camiones_en_cola[operacion.recurso.capacity - t_estaciones_disp].adelanta_camion(
+                entorno, operacion, self)
 
         else:
             pass
@@ -921,7 +951,9 @@ class Camion(object):
         """
         operacion.recurso.camiones_esperando_carga.remove(camion)
         operacion.recurso.camiones_esperando_carga = \
-            [camion] + operacion.recurso.camiones_esperando_carga
+            operacion.recurso.camiones_esperando_carga[0:operacion.recurso.camiones_esperando_carga.index(self)] \
+            + [camion] \
+            + operacion.recurso.camiones_esperando_carga[operacion.recurso.camiones_esperando_carga.index(self):]
         print str(camion) + " adelantado bajo criterio de " + str(self) + " " + str(
             entorno.now)
         print "\tEn sistema: " + str(operacion.recurso.camiones_esperando_carga) + " Hora: " + str(
@@ -929,9 +961,14 @@ class Camion(object):
 
     def verifica_almacenes(self, recursos):
         almacenes = [recursos["Almacen 2"], recursos["Almacen 1"],
-                     recursos["Almacen Ext"], recursos["Patio de Contenedores"]]
+                     recursos["Almacen Ext"], recursos["Patio de Contenedores"],
+                     recursos["Tanque 1"]]
         prod_o_esp_dip = False
-        if self.tipo == "Carga" \
+
+        if self.transbordo == "Si":
+            prod_o_esp_dip = True
+
+        elif self.tipo == "Carga" \
                 and any(self.carga in almacen.niveles.keys() and almacen.niveles[self.carga] >= 28
                         for almacen in almacenes):
             prod_o_esp_dip = True
@@ -1124,7 +1161,7 @@ class MedioDeAlmacenamiento(simpy.Container):
             self.get(28) & camion.trailer.put(28)
             self.niveles[producto] -= 28
         else:
-            print "****ERROR EN CARGA, PRODUCTO NO DISPONIBLE****"
+            print "****ERROR EN CARGA, PRODUCTO NO DISPONIBLE**** " + str(camion)
 
     def descargar_producto(self, camion, producto):
         if (self.capacity - self.level) >= 28:
