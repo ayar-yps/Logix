@@ -97,15 +97,15 @@ class Sistema(simpy.Environment):
                         horarios["horario 1"],
                         capacity=1),
             "Estacion Volcadora":
-                Recurso(self, "Estación Volacdora",
+                Recurso(self, "Estacion Volcadora",
                         horarios["horario 2"],
                         capacity=1),
-            "Estacion Tolva":
-                Recurso(self, "Estación Tolva",
+            "Estacion Tolva/Balanza 3":
+                Recurso(self, "Estacion Tolva/Balanza 3",
                         horarios["horario 2"],
                         capacity=1),
             "Pala Mecanica":
-                Recurso(self, "Pala Mecánica",
+                Recurso(self, "Pala Mecanica",
                         horarios["horario 2"],
                         capacity=1),
             "Cuadrilla de Estibaje":
@@ -113,7 +113,7 @@ class Sistema(simpy.Environment):
                         horarios["horario 2"],
                         capacity=3),
             "Cabina de Recepcion - T1":
-                Recurso(self, "Cabina de Recepción - T1",
+                Recurso(self, "Cabina de Recepcion - T1",
                         horarios["horario 2"],
                         capacity=1),
             "Cabina de Despacho - T1":
@@ -121,7 +121,7 @@ class Sistema(simpy.Environment):
                         horarios["horario 2"],
                         capacity=1),
             "Cabina de Recepcion - T2":
-                Recurso(self, "Cabina de Recepción - T2",
+                Recurso(self, "Cabina de Recepcion - T2",
                         horarios["horario 2"],
                         capacity=1),
             "Cabina de Despacho - T2":
@@ -183,7 +183,7 @@ class Sistema(simpy.Environment):
                                    self.datos),
             "Carga con tolva":
                 OperacionManipuleo("Carga con tolva",
-                                   self.recursos_atencion["Estacion Tolva"],
+                                   self.recursos_atencion["Estacion Tolva/Balanza 3"],
                                    "uniforme", [14, 20],
                                    self.datos),
             "Carga con pala mecanica":
@@ -217,13 +217,13 @@ class Sistema(simpy.Environment):
                                    "uniforme", [15, 22],
                                    self.datos),
             "Transbordo en sistema mecanizado (D)":
-                OperacionManipuleo("Transbordo en sistema mecanizado",
+                OperacionManipuleo("Transbordo en sistema mecanizado (D)",
                                    self.recursos_atencion["Estacion Volcadora"],
                                    "uniforme", [14, 25],
                                    self.datos),
             "Transbordo en sistema mecanizado (C)":
-                OperacionManipuleo("Transbordo en sistema mecanizado",
-                                   self.recursos_atencion["Estacion Tolva"],
+                OperacionManipuleo("Transbordo en sistema mecanizado (C)",
+                                   self.recursos_atencion["Estacion Tolva/Balanza 3"],
                                    "uniforme", [14, 25],
                                    self.datos),
             "Transbordo a pulso - Sacos":
@@ -261,6 +261,16 @@ class Sistema(simpy.Environment):
             "Segundo pesaje":
                 Operacion("Segundo pesaje",
                           self.recursos_atencion["Balanza 2"],
+                          "uniforme", [3, 6],
+                          self.datos),
+            "Primer pesaje - B3":
+                Operacion("Primer pesaje - B3",
+                          self.recursos_atencion["Estacion Tolva/Balanza 3"],
+                          "uniforme", [3, 6],
+                          self.datos),
+            "Segundo pesaje - B3":
+                Operacion("Segundo pesaje -B3",
+                          self.recursos_atencion["Estacion Tolva/Balanza 3"],
                           "uniforme", [3, 6],
                           self.datos),
             "Atencion recepcion 2":
@@ -380,6 +390,7 @@ class Sistema(simpy.Environment):
         :type camion: Camion
         """
         operaciones = self.operaciones["Operaciones manipuleo"]
+        operaciones_complementarias = self.operaciones["Operaciones complementarias"]
 
         # Manipuleo de camion por cargar
         if camion.tipo == "Carga":
@@ -387,64 +398,190 @@ class Sistema(simpy.Environment):
             # Manipuleo de carga a granel seca en almacenes propios
             if camion.carga in ["Harina de Soya - Hi Pro/Pellet de Soya"]:
 
-                # Se carga a partir de un transbordo en sistema mecanizado
-                transbordo = operaciones["Transbordo en sistema mecanizado (C)"]
-                ejecucion_transbordo = yield self.process(
-                    transbordo.ejecutar(self, camion, 0, self.medios_almacenamiento["Tolva"]))
+                # Si la cola de la tolva es aceptable, o si la cola de la pala mecanica y de las cuadrillas
+                # son muy largas, o si no se dispone producto en almacen 1, entonces, se trata de cargar a
+                # partir de un transbordo en sistema mecanizado
+                if len(self.recursos_atencion["Estacion Tolva/Balanza 3"].cola) <= 10 \
+                        or (len(operaciones["Carga con pala mecanica"].recurso.cola) > 10 and
+                            len(self.recursos_atencion["Cuadrilla de Estibaje"].cola) > 8) \
+                        or not camion.dispone_producto_espacio_medio_almacenamiento(
+                            self.medios_almacenamiento["Almacen 1"]):
 
-                # Si no se ejecuta el transbordo se carga con pala mecánica
-                if ejecucion_transbordo in ["No ejecutada por recurso", "No ejecutada por producto"]:
+                    transbordo = operaciones["Transbordo en sistema mecanizado (C)"]
+                    ejecucion_transbordo = yield self.process(
+                        transbordo.ejecutar(self, camion, 30, self.medios_almacenamiento["Tolva"]))
 
-                    carga = operaciones["Carga con pala mecanica"]
-                    ejecucion_carga = yield self.process(
-                        carga.ejecutar(self, camion, 300, self.medios_almacenamiento["Almacen 1"]))
+                    # Si no se ejecuta el transbordo, se trata de cargar el camion tomando otras alternativoas
+                    # bajo un orden de prioridad definida a continuación
+                    if ejecucion_transbordo in ["No ejecutada por recurso", "No ejecutada por producto"]:
 
-                    # Si no se ejecuta la carga espera camion para realizar transbordo o interrumpe la espera de otro
-                    if ejecucion_carga in ["No ejecutada por recurso", "No ejecutada por producto"]:
+                        # Si la cola de la pala mecanica es aceptable o la cola de las cuadrillas es muy larga,
+                        # y se dispone producto en almacenes, entonces, se carga con pala mecanica
+                        if (len(operaciones["Carga con pala mecanica"].recurso.cola) <= 10 or
+                            len(self.recursos_atencion["Cuadrilla de Estibaje"].cola) > 8) \
+                                and camion.dispone_producto_espacio_medio_almacenamiento(
+                                    self.medios_almacenamiento["Almacen 1"]):
 
-                        ejecucion_espera_o_interrumpe = yield self.process(
-                            camion.espera_transbordo_o_interrumpe(self))
+                            if camion.nombre == 32:
+                                print "WTF!!"
+                                print operaciones_complementarias["Primer pesaje - B3"].recurso.cola
 
-                        # Si el camion espera procede con un tranbordo o carga a pulso
-                        if ejecucion_espera_o_interrumpe["Resultado"] != "Interrumpio espera":
+                            yield self.process(operaciones_complementarias["Primer pesaje - B3"]
+                                               .ejecutar(self, camion))
+
+                            carga = operaciones["Carga con pala mecanica"]
+                            yield self.process(
+                                carga.ejecutar(
+                                    self, camion, medio_de_almacenamiento=self.medios_almacenamiento["Almacen 1"]))
+
+                            yield self.process(operaciones_complementarias["Segundo pesaje - B3"]
+                                               .ejecutar(self, camion))
+
+                        # En otro caso, si la cola de las cuadrillas es aceptable y se dipone producto en almacenes,
+                        # entonces, se transborda o carga a pulso
+                        elif len(self.recursos_atencion["Cuadrilla de Estibaje"].cola) <= 8 \
+                                and camion.dispone_producto_espacio_medio_almacenamiento(
+                                    self.medios_almacenamiento["Almacen 1"]):
+
+                            yield self.process(operaciones_complementarias["Primer pesaje - B3"]
+                                               .ejecutar(self, camion))
 
                             transbordo = operaciones["Transbordo a pulso - Granos"]
                             carga = operaciones["Carga a pulso - Granos"]
 
-                            transborda_o_carga = yield self.process(self.transbordar_o_cargar_descargar(
-                                camion, ejecucion_espera_o_interrumpe,
-                                transbordo, 200,
-                                carga, self.medios_almacenamiento["Almacen 1"], 200))
+                            ejecucion_espera_o_interrumpe = yield self.process(
+                                camion.espera_transbordo_o_interrumpe(self, 0))
 
-                            # Si no se ejecuta el transbordo o carga a pulso, se carga con tolva
-                            if transborda_o_carga in ["No ejecutada por recurso", "No ejecutada por producto"]:
-                                carga = operaciones["Carga con tolva"]
-                                yield self.process(
-                                    carga.ejecutar(self, camion, 200, self.medios_almacenamiento["Almacen 1"]))
+                            if ejecucion_espera_o_interrumpe["Resultado"] != "Interrumpio espera":
+                                yield self.process(self.transbordar_o_cargar_descargar(
+                                    camion, ejecucion_espera_o_interrumpe,
+                                    transbordo, float("Inf"),
+                                    carga, self.medios_almacenamiento["Almacen 1"], float("Inf")))
+
+                            yield self.process(operaciones_complementarias["Segundo pesaje - B3"]
+                                               .ejecutar(self, camion))
+
+                        # En otro caso, si al menos se dispone producto en almacenes, entonces,
+                        # se carga con tolva desde almacen.
+                        elif camion.dispone_producto_espacio_medio_almacenamiento(
+                                self.medios_almacenamiento["Almacen 1"]):
+
+                            carga = operaciones["Carga con tolva"]
+                            yield self.process(
+                                carga.ejecutar(
+                                    self, camion, medio_de_almacenamiento=self.medios_almacenamiento["Almacen 1"]))
+
+                        # Si ningun caso anterior fue satisfecho se genera y muestra un error
+                        else:
+                            print "\tERROR " + str(camion) + " NO FUE MANIPULADO - Hora:" + str(self.now)
+
+                # En otro caso, si la cola de la pala mecánica es aceptable o la cola de las cuadrillas es muy larga,
+                # entonces, se carga con pala mecanica.
+                elif len(operaciones["Carga con pala mecanica"].recurso.cola) <= 10 \
+                        or len(self.recursos_atencion["Cuadrilla de Estibaje"].cola) > 8:
+
+                    yield self.process(operaciones_complementarias["Primer pesaje - B3"]
+                                       .ejecutar(self, camion))
+
+                    carga = operaciones["Carga con pala mecanica"]
+                    yield self.process(
+                        carga.ejecutar(
+                            self, camion, medio_de_almacenamiento=self.medios_almacenamiento["Almacen 1"]))
+
+                    yield self.process(operaciones_complementarias["Segundo pesaje - B3"].ejecutar(self, camion))
+
+                # En otro caso, si la cola de cuadrillas es aceptable, entonces, se transborda o carga a pulso.
+                elif len(self.recursos_atencion["Cuadrilla de Estibaje"].cola) <= 8:
+
+                    yield self.process(operaciones_complementarias["Primer pesaje - B3"]
+                                       .ejecutar(self, camion))
+
+                    # Si no hay posibilidad de que arriben camiones para transbordo, se carga a pulso
+                    if len(self.recursos_atencion["Estacion Volcadora"].cola) > 10 \
+                            and len(self.recursos_atencion["Cuadrilla de Estibaje"].cola) <= 8:
+                        carga = operaciones["Carga a pulso - Granos"]
+                        yield self.process(
+                            carga.ejecutar(
+                                self, camion, medio_de_almacenamiento=self.medios_almacenamiento["Almacen 1"]))
+
+                    # En caso contrario, se transborda o carga a pulso
+                    else:
+                        transbordo = operaciones["Transbordo a pulso - Granos"]
+                        carga = operaciones["Carga a pulso - Granos"]
+
+                        ejecucion_espera_o_interrumpe = yield self.process(
+                            camion.espera_transbordo_o_interrumpe(self, 10))
+
+                        if ejecucion_espera_o_interrumpe["Resultado"] != "Interrumpio espera":
+                            yield self.process(self.transbordar_o_cargar_descargar(
+                                camion, ejecucion_espera_o_interrumpe,
+                                transbordo, float("Inf"),
+                                carga, self.medios_almacenamiento["Almacen 1"], float("Inf")))
+
+                    yield self.process(operaciones_complementarias["Segundo pesaje - B3"]
+                                       .ejecutar(self, camion))
+
+                # Si ningun caso anterior fue satisfecho se genera y muestra un error
+                else:
+                    print "\tERROR " + str(camion) + " NO FUE MANIPULADO - Hora:" + str(self.now)
 
             # Manipuleo de carga a granel seca en almacenes externos
             elif camion.carga in ["Grano de Soya"]:
 
-                # Se carga con pala mecanica
-                carga = operaciones["Carga con pala mecanica"]
-                ejecucion_carga = yield self.process(
-                    carga.ejecutar(self, camion, 600, self.medios_almacenamiento["Almacen Ext"]))
-
-                # Si no se ejecuta la carga, espera camion para realizar transbordo o interrumpe la espera de otro
-                if ejecucion_carga in ["No ejecutada por recurso", "No ejecutado por producto"]:
+                # Si se dispone algún camion esperando por transbordo, entonces,
+                # se interrumpe su espera y se transborda a pulso
+                if camion.dispone_camion_esperando_camion(self):
 
                     ejecucion_espera_o_interrumpe = yield self.process(
-                        camion.espera_transbordo_o_interrumpe(self))
+                        camion.espera_transbordo_o_interrumpe(self, 0))
 
-                    # Si el camion espera procede con un tranbordo o carga a pulso
+                    # Si el camion espera se genera y muestra un error
                     if ejecucion_espera_o_interrumpe["Resultado"] != "Interrumpio espera":
-                        transbordo = operaciones["Transbordo a pulso - Granos"]
-                        carga = operaciones["Carga a pulso - Granos"]
+                        print "\tERROR " + str(camion) + " NO FUE MANIPULADO - Hora:" + str(self.now)
 
-                        yield self.process(self.transbordar_o_cargar_descargar(
-                            camion, ejecucion_espera_o_interrumpe,
-                            transbordo, 200,
-                            carga, self.medios_almacenamiento["Almacen Ext"], 200))
+                # En caso contrario, si la pala mecanica tiene una cola aceptable o la cola de las cuadrillas
+                # es muy larga, entonces, se carga con pala mecanica
+                elif len(self.recursos_atencion["Pala Mecanica"].cola) <= 10 \
+                        or len(self.recursos_atencion["Pala Mecanica"].cola) > 8:
+
+                    carga = operaciones["Carga con pala mecanica"]
+                    yield self.process(
+                        carga.ejecutar(
+                            self, camion, medio_de_almacenamiento=self.medios_almacenamiento["Almacen Ext"]))
+
+                # Si la cola de la pala mecanica es muy larga y la de las cuadrillas es aceptable,
+                # entonces, tenemos dos casos:
+                else:
+
+                    # Si se dispone producto, se transborda o carga a pulso con poca paciencia
+                    if camion.dispone_producto_espacio_medios_almacenamiento(self):
+                        ejecucion_espera_o_interrumpe = yield self.process(
+                            camion.espera_transbordo_o_interrumpe(self, 10))
+
+                        # Si el camion espero se procede con un tranbordo o carga a pulso
+                        if ejecucion_espera_o_interrumpe["Resultado"] != "Interrumpio espera":
+                            transbordo = operaciones["Transbordo a pulso - Granos"]
+                            carga = operaciones["Carga a pulso - Granos"]
+
+                            yield self.process(self.transbordar_o_cargar_descargar(
+                                camion, ejecucion_espera_o_interrumpe,
+                                transbordo, float("Inf"),
+                                carga, self.medios_almacenamiento["Almacen Ext"], float("Inf")))
+
+                    # Si no se dispone producto, se transborda o carga a pulso con mayor paciencia
+                    else:
+                        ejecucion_espera_o_interrumpe = yield self.process(
+                            camion.espera_transbordo_o_interrumpe(self, 30))
+
+                        # Si el camion espero se procede con un tranbordo o carga a pulso
+                        if ejecucion_espera_o_interrumpe["Resultado"] != "Interrumpio espera":
+                            transbordo = operaciones["Transbordo a pulso - Granos"]
+                            carga = operaciones["Carga a pulso - Granos"]
+
+                            yield self.process(self.transbordar_o_cargar_descargar(
+                                camion, ejecucion_espera_o_interrumpe,
+                                transbordo, float("Inf"),
+                                carga, self.medios_almacenamiento["Almacen Ext"], float("Inf")))
 
         # Manipuleo de camion por descargar
         elif camion.tipo == "Descarga":
@@ -452,17 +589,104 @@ class Sistema(simpy.Environment):
             # Manipuleo de carga a granel en almacenes propios
             if camion.carga in ["Harina de Soya - Hi Pro/Pellet de Soya"]:
 
-                # Se descarga a partir de un transbordo en sistema mecanizado
-                transbordo = operaciones["Transbordo en sistema mecanizado (D)"]
-                ejecucion_transbordo = yield self.process(
-                    transbordo.ejecutar(self, camion, 120, self.medios_almacenamiento["Tolva"]))
+                # Si se dispone espacio en Tolva y, la cola de la volcadora es aceptable o la cola de cuadrillas
+                # es muy larga, entonces, se descarga a partir de un transbordo en sistema mecanizado.
+                if (camion.dispone_producto_espacio_medio_almacenamiento(
+                        self.medios_almacenamiento["Tolva"]) or
+                    not camion.dispone_producto_espacio_medio_almacenamiento(
+                        self.medios_almacenamiento["Almacen 1"])) \
+                        and (len(self.recursos_atencion["Estacion Volcadora"].cola) <= 10 or
+                             len(self.recursos_atencion["Cuadrilla de Estibaje"].cola) > 8):
 
-                # Si no se ejecuta el transbordo por disp. de recurso espera camion para realizar transbordo
-                # a pulso o interrumpe la espera de otro
-                if ejecucion_transbordo == "No ejecutada por recurso":
+                    transbordo = operaciones["Transbordo en sistema mecanizado (D)"]
+                    ejecucion_transbordo = yield self.process(
+                        transbordo.ejecutar(
+                            self, camion, medio_de_almacenamiento=self.medios_almacenamiento["Tolva"]))
+
+                    # En caso que no se ejecute el transbordo segenera y muestra un error
+                    if ejecucion_transbordo in ["No ejecutada por recurso", "No ejecutada por producto"]:
+                        print "\tERROR " + str(camion) + " NO FUE MANIPULADO - Hora:" + str(self.now)
+
+                # En otro caso, si se dispone espacio en Almacen 1 y, la cola de la volcadora es acepetable o
+                # la cola de cuadrillas es muy larga, entonces, se descarga con sistema mecanicado a almacen.
+                elif camion.dispone_producto_espacio_medio_almacenamiento(self.medios_almacenamiento["Almacen 1"]) \
+                        and (len(self.recursos_atencion["Estacion Volcadora"].cola) <= 10 or
+                             len(self.recursos_atencion["Cuadrilla de Estibaje"].cola) > 8):
+
+                    descarga = operaciones["Descarga con volcadora"]
+                    yield self.process(
+                        descarga.ejecutar(
+                            self, camion, medio_de_almacenamiento=self.medios_almacenamiento["Almacen 1"]))
+
+                # En otro caso, si se dispone producto en almacen 1 y la cola de las cuadrillas es aceptable,
+                # entonces, se transborda o descarga a pulso.
+                elif camion.dispone_producto_espacio_medio_almacenamiento(self.medios_almacenamiento["Almacen 1"]) \
+                        and len(self.recursos_atencion["Cuadrilla de Estibaje"].cola) <= 8:
+
+                    # Si no hay posibilidad de que arriben camiones para transbordo, se descarga a pulso
+                    if len(self.recursos_atencion["Estacion Tolva/Balanza 3"].cola) <= 10 \
+                            or len(self.recursos_atencion["Cuadrilla de Estibaje"].cola) > 8 \
+                            or not camion.dispone_producto_espacio_medio_almacenamiento(
+                                self.medios_almacenamiento["Almacen 1"]):
+
+                        descarga = operaciones["Descarga a pulso - Granos"]
+                        yield self.process(
+                            descarga.ejecutar(
+                                self, camion, medio_de_almacenamiento=self.medios_almacenamiento["Almacen 1"]))
+
+                    # En caso contrario, se transborda o descarga a pulso
+                    else:
+
+                        ejecucion_espera_o_interrumpe = yield self.process(
+                            camion.espera_transbordo_o_interrumpe(self, 20))
+
+                        # Si el camion espera procede con un tranbordo o descarga a pulso
+                        if ejecucion_espera_o_interrumpe["Resultado"] != "Interrumpio espera":
+                            transbordo = operaciones["Transbordo a pulso - Granos"]
+                            descarga = operaciones["Descarga a pulso - Granos"]
+
+                            yield self.process(self.transbordar_o_cargar_descargar(
+                                camion, ejecucion_espera_o_interrumpe,
+                                transbordo, float("Inf"),
+                                descarga, self.medios_almacenamiento["Almacen 1"], float("Inf")))
+
+                # En otro caso, si no se dispone producto en almacen 1 y la cola de las cuadrillas es aceptable,
+                # entonces, se transborda a pulso.
+                elif not camion.dispone_producto_espacio_medio_almacenamiento(self.medios_almacenamiento["Almacen 1"]) \
+                        and len(self.recursos_atencion["Cuadrilla de Estibaje"].cola) <= 8:
 
                     ejecucion_espera_o_interrumpe = yield self.process(
                         camion.espera_transbordo_o_interrumpe(self))
+
+                    # Si el camion espera procede con un tranbordo o descarga a pulso
+                    if ejecucion_espera_o_interrumpe["Resultado"] != "Interrumpio espera":
+                        transbordo = operaciones["Transbordo a pulso - Granos"]
+
+                        yield self.process(self.transbordar_o_cargar_descargar(
+                            camion, ejecucion_espera_o_interrumpe,
+                            transbordo, float("Inf")))
+
+                # Si ningun caso anterior fue satisfecho se genera y muestra un error
+                else:
+                    print "\tERROR " + str(camion) + " NO FUE MANIPULADO - Hora:" + str(self.now)
+
+            # Manipuleo de carga a granel en almacenes externos
+            elif camion.carga in ["Grano de Soya"]:
+
+                # Si la cola de pala mecanica no es muy larga, se descarga a pulso.
+                if len(operaciones["Carga con pala mecanica"].recurso.cola) <= 10 \
+                        or len(self.recursos_atencion["Cuadrilla de Estibaje"].cola) > 8:
+
+                    descarga = operaciones["Descarga a pulso - Granos"]
+                    yield self.process(
+                        descarga.ejecutar(
+                            self, camion, medio_de_almacenamiento=self.medios_almacenamiento["Almacen Ext"]))
+
+                # En otro caso, se transborda o descarga a pulso
+                else:
+                    # Espera camion para realizar transbordo o interrumpe la espera de otro
+                    ejecucion_espera_o_interrumpe = yield self.process(
+                        camion.espera_transbordo_o_interrumpe(self, 30))
 
                     # Si el camion espera procede con un tranbordo o descarga a pulso
                     if ejecucion_espera_o_interrumpe["Resultado"] != "Interrumpio espera":
@@ -471,31 +695,8 @@ class Sistema(simpy.Environment):
 
                         yield self.process(self.transbordar_o_cargar_descargar(
                             camion, ejecucion_espera_o_interrumpe,
-                            transbordo, 200,
-                            descarga, self.medios_almacenamiento["Almacen 1"], 200))
-
-                # Si no se ejecuta el transbordo por nivel de producto se descarga en almacenes propios
-                elif ejecucion_transbordo == "No ejecutada por producto":
-
-                    descarga = operaciones["Descarga con volcadora"]
-                    yield self.process(descarga.ejecutar(self, camion, 100, self.medios_almacenamiento["Almacen 1"]))
-
-            # Manipuleo de carga a granel en almacenes externos
-            elif camion.carga in ["Grano de Soya"]:
-
-                # Espera camion para realizar transbordo o interrumpe la espera de otro
-                ejecucion_espera_o_interrumpe = yield self.process(
-                    camion.espera_transbordo_o_interrumpe(self))
-
-                # Si el camion espera procede con un tranbordo o descarga a pulso
-                if ejecucion_espera_o_interrumpe["Resultado"] != "Interrumpio espera":
-                    transbordo = operaciones["Transbordo a pulso - Granos"]
-                    descarga = operaciones["Descarga a pulso - Granos"]
-
-                    yield self.process(self.transbordar_o_cargar_descargar(
-                        camion, ejecucion_espera_o_interrumpe,
-                        transbordo, 200,
-                        descarga, self.medios_almacenamiento["Almacen Ext"], 200))
+                            transbordo, float("Inf"),
+                            descarga, self.medios_almacenamiento["Almacen Ext"], float("Inf")))
 
     def manipular_sacos(self, camion):
         """
@@ -510,7 +711,7 @@ class Sistema(simpy.Environment):
 
             # Espera camion para realizar transbordo o interrumpe la espera de otro
             ejecucion_espera_o_interrumpe = yield self.process(
-                camion.espera_transbordo_o_interrumpe(self))
+                camion.espera_transbordo_o_interrumpe(self, 100))
 
             # Si el camion espera procede con un tranbordo o carga a pulso
             if ejecucion_espera_o_interrumpe["Resultado"] != "Interrumpio espera":
@@ -527,7 +728,7 @@ class Sistema(simpy.Environment):
 
             # Espera camion para realizar transbordo o interrumpe la espera de otro
             ejecucion_espera_o_interrumpe = yield self.process(
-                camion.espera_transbordo_o_interrumpe(self))
+                camion.espera_transbordo_o_interrumpe(self, 100))
 
             # Si el camion espera procede con un tranbordo o descarga a pulso
             if ejecucion_espera_o_interrumpe["Resultado"] != "Interrumpio espera":
@@ -645,7 +846,7 @@ class Sistema(simpy.Environment):
                 transbordo, 500))
 
     def transbordar_o_cargar_descargar(self, camion, ejecucion_espera_o_interrumpe,
-                                       transbordo, tpaciencia_t,
+                                       transbordo, tpaciencia_t=float("Inf"),
                                        carga_o_descarga=None, recurso_cd=None, tpaciencia_cd=None):
         """
         Modelado de ejecucíón de carga/descarga finalizado el tiempo de espera
@@ -689,7 +890,8 @@ class Sistema(simpy.Environment):
             yield self.process(operaciones["Atencion despacho 1"]
                                .ejecutar(self, camion))
 
-        if camion.carga not in ["Contenedor 20", "Contenedor 40"]:
+        if camion.carga not in ["Contenedor 20", "Contenedor 40"] and \
+                not (camion.tipo == "Carga" and camion.carga == "Harina de Soya - Hi Pro/Pellet de Soya"):
             yield self.process(operaciones["Primer pesaje"]
                                .ejecutar(self, camion))
         self.exit(camion.nombre)
@@ -702,7 +904,8 @@ class Sistema(simpy.Environment):
         """
         operaciones = self.operaciones["Operaciones complementarias"]
 
-        if camion.carga not in ["Contenedor 20", "Contenedor 40"]:
+        if camion.carga not in ["Contenedor 20", "Contenedor 40"] and \
+                not (camion.tipo == "Carga" and camion.carga == "Harina de Soya - Hi Pro/Pellet de Soya"):
             yield self.process(operaciones["Segundo pesaje"]
                                .ejecutar(self, camion))
 
@@ -722,7 +925,7 @@ class Sistema(simpy.Environment):
         with open(archivo, "wb") as csv_file:
             writer = csv.writer(csv_file, delimiter=';')
             writer.writerow(
-                ["Camion", "Carga", "Tipo", "Peso Final", "Operacion", "Dia",
+                ["Camion", "Carga", "Tipo", "Peso Final", "Operacion", "Recurso", "Dia",
                  "Arribo", "Espera M. O/D", "Espera R", "Espera P.", "Espera T.", "Inicio", "Fin",
                  "Medio de Almacenamiento", "Nivel"])
             for linea in self.datos:
@@ -741,7 +944,7 @@ class Sistema(simpy.Environment):
         if horizonte == "dia":
             tsim = 24 * 60
         elif horizonte == "semana":
-            tsim = 6 * 24 * 60
+            tsim = 3 * 24 * 60
         elif horizonte == "mes":
             tsim = 4 * 6 * 24 * 60
 
@@ -882,10 +1085,11 @@ class Camion(object):
         """
         proceso.interrupt(self)
 
-    def espera_transbordo_o_interrumpe(self, sistema):  # TODO Cambiar de nombre
+    def espera_transbordo_o_interrumpe(self, sistema, tespera=float("Inf")):  # TODO Cambiar de nombre
         """
         Permite que un camion espere o interrumpa la espera de otro para realizar un transbordo
 
+        :type tespera: int
         :type sistema: Sistema
         :type self: Camion
         """
@@ -899,7 +1103,7 @@ class Camion(object):
         if len(sistema.colas_espera_transbordo[self.carga][tipo_camion_en_esp]) != 0:
 
             print str(self) + " Interrumpe espera  - Hora: " + str(sistema.now)
-
+            self.transbordo = "Si"
             camion_en_espera = sistema.colas_espera_transbordo[self.carga][tipo_camion_en_esp][0][0]
             espera_en_proceso = sistema.colas_espera_transbordo[self.carga][tipo_camion_en_esp][0][1]
 
@@ -908,6 +1112,7 @@ class Camion(object):
             sistema.colas_espera_transbordo[self.carga][tipo_camion_en_esp].pop(0)  # TODO revisar
             camion_interrumpido = camion_en_espera
 
+            self.manipulado.succeed()
             yield camion_interrumpido.manipulado
 
             sistema.exit({"Resultado": "Interrumpio espera", "Interrupcion": None})
@@ -915,10 +1120,10 @@ class Camion(object):
         # Si no hay camiones esperando entonces el camion espera
         else:
 
-            if self.carga == "Fierro":
-                tespera = float("Inf")  # TODO permitir una espera infinita
-            else:
-                tespera = 100
+            # if self.carga == "Fierro":
+            #     tespera = float("Inf")  # TODO permitir una espera infinita
+            # else:
+            #     tespera = 100
 
             espera_transbordo = sistema.process(self.espera_transbordo(sistema, tespera))
             sistema.colas_espera_transbordo[self.carga][self.tipo].append([self, espera_transbordo])
@@ -1094,7 +1299,7 @@ class Camion(object):
                 for camion in primeros_cola_r_a)
 
         primeros_cola_m_a_disponen_p_e = \
-            all(camion.dispone_producto_espacio_medios_almacenamiento(sistema)
+            all(camion.dispone_producto_espacio_medio_almacenamiento(medio_de_almacenamiento)  # TODO rev. posibles bugs
                 for camion in primeros_cola_m_a)
 
         primeros_cola_r_a_entre_primeros_colas_m_a = \
@@ -1106,14 +1311,35 @@ class Camion(object):
 
         elif self.dispone_producto_espacio_medio_almacenamiento(medio_de_almacenamiento):
 
+            if self.nombre == 9:
+                print primeros_cola_m_a
+
             if self.entre_primeros_cola_medio_de_almacenamiento(medio_de_almacenamiento) \
                     and (not primeros_cola_r_a_disponen_p_e or not primeros_cola_r_a_entre_primeros_colas_m_a):
                 primeros_cola_r_a[operacion.recurso.count].adelanta_camion(
                     sistema, operacion, medio_de_almacenamiento, self, "Operacion")
 
             if self.entre_primeros_cola_recurso(operacion.recurso) and not primeros_cola_m_a_disponen_p_e:
+
                 primeros_cola_m_a[medio_de_almacenamiento.espacios_en_uso].adelanta_camion(
                     sistema, operacion, medio_de_almacenamiento, self, "Almacen")
+
+    def solicita_adelanto_operacion(self, sistema, operacion, medio_de_almacenamiento=None):
+
+        primeros_cola_r_a = operacion.recurso.cola[0:operacion.recurso.capacity]
+        primeros_cola_r_a_disponen_p_e_s_o_manip =\
+            all(camion.dispone_producto_espacio_sistema(sistema) or camion.manipulado.triggered
+                for camion in primeros_cola_r_a)
+
+        if operacion.recurso.nombre == "Balanza 2":
+            pass
+        elif operacion.nombre == "Primer pesaje - B3":
+            operacion.recurso.cola[operacion.recurso.count].adelanta_camion(
+                sistema, operacion, medio_de_almacenamiento, self, "Operacion")
+        elif (self.dispone_producto_espacio_sistema(sistema) or self.manipulado.triggered) \
+                and not primeros_cola_r_a_disponen_p_e_s_o_manip:
+            primeros_cola_r_a[operacion.recurso.count].adelanta_camion(
+                sistema, operacion, medio_de_almacenamiento, self, "Operacion")
 
     def adelanta_camion(self, entorno, operacion, medio_de_origen_o_destino, camion, tipo):
         """
@@ -1138,15 +1364,15 @@ class Camion(object):
             print str(camion) + " adelantado bajo criterio de " + str(self) + " " + str(entorno.now)
             print "\tEn sistema: " + str(operacion.recurso.cola) + " Hora: " + str(entorno.now)
 
-            if self in medio_de_origen_o_destino.cola and camion in medio_de_origen_o_destino.cola:
-                medio_de_origen_o_destino.cola.remove(camion)
-                medio_de_origen_o_destino.cola = \
-                    medio_de_origen_o_destino.cola[0:medio_de_origen_o_destino.cola.index(self)] + [camion] \
-                    + medio_de_origen_o_destino.cola[medio_de_origen_o_destino.cola.index(self):]
-
-                print "NO BORRAR SI AUN SE LEE"
-                print "\t" + medio_de_origen_o_destino.nombre + ":" \
-                      + str(medio_de_origen_o_destino.cola) + " Hora: " + str(entorno.now)
+            # if self in medio_de_origen_o_destino.cola and camion in medio_de_origen_o_destino.cola:
+            #     medio_de_origen_o_destino.cola.remove(camion)
+            #     medio_de_origen_o_destino.cola = \
+            #         medio_de_origen_o_destino.cola[0:medio_de_origen_o_destino.cola.index(self)] + [camion] \
+            #         + medio_de_origen_o_destino.cola[medio_de_origen_o_destino.cola.index(self):]
+            #
+            #     print "NO BORRAR SI AUN SE LEE"
+            #     print "\t" + medio_de_origen_o_destino.nombre + ":" \
+            #           + str(medio_de_origen_o_destino.cola) + " Hora: " + str(entorno.now)
 
         elif tipo == "Almacen":
 
@@ -1178,7 +1404,7 @@ class Camion(object):
         # medio de almacenamiento que disponga producto/espacio y este por detras en la
         # cola del recurso de atención
         if entre_primeros_cola_m_a and entre_primeros_cola_r_a and \
-                any(c.dispone_producto_espacio_medios_almacenamiento(sistema) and
+                any(c.dispone_producto_espacio_medio_almacenamiento(medio_de_almacenamiento) and
                     c.atras_de_camion_en_cola_recurso(self, operacion.recurso)
                     for c in medio_de_almacenamiento.cola_detras_de_camion(self)):
             c_adelantado = [ca for ca in medio_de_almacenamiento.cola_detras_de_camion(self)
@@ -1188,10 +1414,10 @@ class Camion(object):
             self.adelanta_camion(sistema, operacion, medio_de_almacenamiento, c_adelantado, "Almacen")
 
         # El camion verifica si puede adelantar algun camion por detras en la cola del
-        # medio de almacenamiento que disponga producto/espacio y esta entre los primeros
+        # medio de almacenamiento que disponga producto/espacio y este entre los primeros
         # en alguna cola de recursos de atención
         if entre_primeros_cola_m_a and \
-                any(c.dispone_producto_espacio_medios_almacenamiento(sistema) and
+                any(c.dispone_producto_espacio_medio_almacenamiento(medio_de_almacenamiento) and
                     c.entre_primeros_colas_recursos(sistema.recursos_atencion)
                     for c in medio_de_almacenamiento.cola_detras_de_camion(self)):
             c_adelantado = [ca for ca in medio_de_almacenamiento.cola_detras_de_camion(self)
@@ -1204,8 +1430,7 @@ class Camion(object):
         # recurso de atención que disponga producto/espacio y este entre los primeros
         # en alguna cola de medios de almacenamiento
         if entre_primeros_cola_r_a and \
-                any(c.dispone_producto_espacio_medios_almacenamiento(sistema) and
-                    c.entre_primeros_colas_medios_almacenamiento(sistema)
+                any(c.dispone_producto_espacio_y_entre_primeros_medios_almacenamiento(sistema)  # TODO rev. posib. bugs
                     for c in operacion.recurso.cola_detras_de_camion(self)):
             c_adelantado = [ca for ca in operacion.recurso.cola_detras_de_camion(self)
                             if ca.dispone_producto_espacio_medios_almacenamiento(sistema) and
@@ -1225,6 +1450,18 @@ class Camion(object):
 
         return medios_de_almacenamiento_destino
 
+    def dispone_camion_esperando_camion(self, sistema):
+
+        if self.tipo == "Carga":
+            tipo_camion_en_espera = "Descarga"
+        else:
+            tipo_camion_en_espera = "Carga"
+
+        if len(sistema.colas_espera_transbordo[self.carga][tipo_camion_en_espera]) > 0:
+            return True
+        else:
+            return False
+
     def dispone_producto_espacio_sistema(self, sistema):
 
         camiones_comparables_a_cargar = 0
@@ -1237,6 +1474,8 @@ class Camion(object):
             camiones_comparables_a_descargar += \
                 sum(1 for c in sistema.camiones_en_sistema
                     if c.carga == self.carga and c.tipo == "Descarga" and not c.manipulado.triggered)
+            if not self.manipulado.triggered and self in sistema.camiones_en_sistema:
+                camiones_comparables_a_cargar -= 1
         else:
             camiones_comparables_a_cargar += \
                 sum(1 for c in sistema.camiones_en_sistema
@@ -1246,6 +1485,8 @@ class Camion(object):
                 sum(1 for c in sistema.camiones_en_sistema
                     if self.medios_almacenamiento_destino(sistema) == c.medios_almacenamiento_destino(sistema) and
                     c.tipo == "Descarga" and not c.manipulado.triggered)
+            if not self.manipulado.triggered and self in sistema.camiones_en_sistema:
+                camiones_comparables_a_descargar -= 1
 
         producto_espacio_disponible = 0
 
@@ -1257,6 +1498,10 @@ class Camion(object):
                 producto_espacio_disponible += almacen.espacio
 
         if self.tipo == "Carga":
+            # if self.nombre == 52:
+            #     print str(camiones_comparables_a_descargar) + " " + str(camiones_comparables_a_cargar)
+            #     print sistema.camiones_en_sistema
+            #     print [not c.manipulado.triggered for c in sistema.camiones_en_sistema]
             if producto_espacio_disponible + 28 * (camiones_comparables_a_descargar - camiones_comparables_a_cargar) \
                     >= 28:
                 return True
@@ -1278,12 +1523,25 @@ class Camion(object):
         :type sistema: Sistema
         """
         medios_de_almacenamiento = sistema.medios_almacenamiento.values()
-
         prod_o_esp_dip = False
 
         if self.transbordo == "Si" or (self.tipo == "Descarga" and self.carga == "Fierro"):
             prod_o_esp_dip = True
         elif any(self.carga in ma.niveles.keys() and self.dispone_producto_espacio_medio_almacenamiento(ma)
+                 for ma in medios_de_almacenamiento):
+            prod_o_esp_dip = True
+
+        return prod_o_esp_dip
+
+    def dispone_producto_espacio_y_entre_primeros_medios_almacenamiento(self, sistema):  # TODO revisar posibles bugs
+
+        medios_de_almacenamiento = sistema.medios_almacenamiento.values()
+        prod_o_esp_dip = False
+
+        if self.transbordo == "Si" or (self.tipo == "Descarga" and self.carga == "Fierro"):
+            prod_o_esp_dip = True
+        elif any(self.carga in ma.niveles.keys() and self.dispone_producto_espacio_medio_almacenamiento(ma) and
+                 self.entre_primeros_cola_medio_de_almacenamiento(ma)
                  for ma in medios_de_almacenamiento):
             prod_o_esp_dip = True
 
@@ -1353,7 +1611,7 @@ class Camion(object):
         entre_primeros = False
         recursos_manipuleo = [
             recursos["Estacion Volcadora"],
-            recursos["Estacion Tolva"],
+            recursos["Estacion Tolva/Balanza 3"],
             recursos["Pala Mecanica"],
             recursos["Cuadrilla de Estibaje"],
             recursos["Cabina de Recepcion - T1"],
@@ -1462,13 +1720,16 @@ class Operacion(object):
         """
 
         arribo = sistema.now
+
+        # if self.nombre != "Primer pesaje - B3":
         self.recurso.cola.append(camion)
 
-        if camion.nombre == 314 and self.nombre == "Atencion despacho 2":
-            print "------------------------ Si llego!"
+        if self.recurso.nombre == "Estacion Tolva/Balanza 3":
             print self.recurso.cola
 
-        # Camion solicita adelanto ingreso
+        if not camion.entre_primeros_cola_recurso(self.recurso):
+            camion.solicita_adelanto_operacion(sistema, self)
+
         yield sistema.process(
             camion.espera_operacion(sistema, self))
 
@@ -1498,8 +1759,8 @@ class Operacion(object):
 
             dia = round(sistema.now / (24 * 60) + 0.5)
 
-            fila_de_datos = [camion.nombre, camion.carga, camion.tipo, camion.peso, self.nombre, dia,
-                             arribo, "-", espera_r, "-", espera_r, inicio, salida, "-", "-"]
+            fila_de_datos = [camion.nombre, camion.carga, camion.tipo, camion.peso, self.nombre, self.recurso.nombre,
+                             dia, arribo, "-", espera_r, "-", espera_r, inicio, salida, "-", "-"]
 
             self.datos.append(fila_de_datos)
 
@@ -1593,9 +1854,9 @@ class OperacionManipuleo(Operacion):
 
                         dia = round(sistema.now / (24 * 60) + 0.5)
 
-                        fila_de_datos = [camion.nombre, camion.carga, camion.tipo, camion.peso, self.nombre, dia,
-                                         arribo, espera_m_od, espera_r, espera_p, espera_t, inicio, salida,
-                                         medio_de_almacenamiento.nombre,
+                        fila_de_datos = [camion.nombre, camion.carga, camion.tipo, camion.peso, self.nombre,
+                                         self.recurso.nombre, dia, arribo, espera_m_od, espera_r, espera_p, espera_t,
+                                         inicio, salida, medio_de_almacenamiento.nombre,
                                          medio_de_almacenamiento.niveles[camion.carga]]
 
                         self.datos.append(fila_de_datos)
@@ -1604,15 +1865,20 @@ class OperacionManipuleo(Operacion):
 
                     else:
 
+                        print " ------------- 2 ---------- NO BORRAR SI SE LEE"
+
                         medio_de_almacenamiento.cola.remove(camion)
                         self.recurso.cola.remove(camion)
                         print "%s NO EJECUTADA POR RECURSO" % camion
                         sistema.exit("No ejecutada por recurso")
 
             else:
-
-                medio_de_almacenamiento.cola.remove(camion)
+                # Si no se ejecuta Transbordo en sistema mecanizado (C) no sale de la cola del recurso
+                # porque realizara un primer pesaje en B3
+                # if self.nombre != "Transbordo en sistema mecanizado (C)":
+                #     self.recurso.cola.remove(camion)
                 self.recurso.cola.remove(camion)
+                medio_de_almacenamiento.cola.remove(camion)
                 print str(camion) + " SALE DE SISTEMA SIN EJECUCIÓN - HORA: " + str(sistema.now)
                 print "%s NO EJECUTADA POR PRODUCTO" % camion
                 print "\t" + medio_de_almacenamiento.nombre + " " \
