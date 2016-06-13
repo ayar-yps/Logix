@@ -48,34 +48,9 @@ class Sistema(simpy.Environment):
         }
 
         self.camiones_en_sistema = []
+        self.capacidad_sistema = 20
 
-        # Definición de Recursos
-        niv_tolva = {
-            "Harina de Soya - Hi Pro/Pellet de Soya": 0
-        }
-        niv_almacen_1 = {
-            "Harina de Soya - Hi Pro/Pellet de Soya": 500
-        }
-        niv_almacen_2 = {
-            "Harina de Soya - Full Fat": 100,
-            "Torta de Soya": 100,
-            "Torta de Girasol": 100,
-            "Azucar": 100
-        }
-        niv_almacen_ext = {
-            "Grano de Soya": 0
-        }
-        niv_tanque_1 = {
-            "Aceite de Soya": 0
-        }
-        niv_tanque_2 = {
-            "Aceite de Soya": 0
-        }
-        niv_patio_cont = {
-            "Contenedor 20": 0,
-            "Contenedor 40": 0
-        }
-
+        # Definición de Recursos de Atención
         horarios = {
             "horario 1": {"L-V": {"Ingreso": 7.5, "I. Descanso": 13.0, "F. Descanso": 14.0, "Salida": 16.5},
                           "SAB": {"Ingreso": 8.5, "Salida": 12.5}},
@@ -133,6 +108,32 @@ class Sistema(simpy.Environment):
                         horarios["horario 2"],
                         capacity=1)}
 
+        # Definición de medios de almacenamiento
+        niv_tolva = {
+            "Harina de Soya - Hi Pro/Pellet de Soya": 0
+        }
+        niv_almacen_1 = {
+            "Harina de Soya - Hi Pro/Pellet de Soya": 500
+        }
+        niv_almacen_2 = {
+            "Harina de Soya - Full Fat": 100,
+            "Torta de Soya": 100,
+            "Torta de Girasol": 100,
+            "Azucar": 100
+        }
+        niv_almacen_ext = {
+            "Grano de Soya": 0
+        }
+        niv_tanque_1 = {
+            "Aceite de Soya": 0
+        }
+        niv_tanque_2 = {
+            "Aceite de Soya": 0
+        }
+        niv_patio_cont = {
+            "Contenedor 20": 0,
+            "Contenedor 40": 0
+        }
         self.medios_almacenamiento = {
             "Tolva":
                 MedioDeAlmacenamiento(self, "Tolva", 2, niv_tolva, 400),
@@ -421,10 +422,6 @@ class Sistema(simpy.Environment):
                             len(self.recursos_atencion["Cuadrilla de Estibaje"].cola) > 8) \
                                 and camion.dispone_producto_espacio_medio_almacenamiento(
                                     self.medios_almacenamiento["Almacen 1"]):
-
-                            if camion.nombre == 32:
-                                print "WTF!!"
-                                print operaciones_complementarias["Primer pesaje - B3"].recurso.cola
 
                             yield self.process(operaciones_complementarias["Primer pesaje - B3"]
                                                .ejecutar(self, camion))
@@ -1120,11 +1117,6 @@ class Camion(object):
         # Si no hay camiones esperando entonces el camion espera
         else:
 
-            # if self.carga == "Fierro":
-            #     tespera = float("Inf")  # TODO permitir una espera infinita
-            # else:
-            #     tespera = 100
-
             espera_transbordo = sistema.process(self.espera_transbordo(sistema, tespera))
             sistema.colas_espera_transbordo[self.carga][self.tipo].append([self, espera_transbordo])
 
@@ -1195,6 +1187,13 @@ class Camion(object):
             espera_t += 1
             yield sistema.timeout(1)
 
+            # Si se espera por un Transbordo en sistema mecanizado (C), se deja de esperar solo si se dispone
+            # producto en almacen 1
+            if espera_t == tpaciencia_t and operacion.nombre == "Transbordo en sistema mecanizado (C)"\
+                    and not self.dispone_producto_espacio_medio_almacenamiento(
+                        sistema.medios_almacenamiento["Almacen 1"]):
+                tpaciencia_t += 1
+
         if self.dispone_producto_espacio_medio_almacenamiento(medio_de_almacenamiento) and espera_t <= tpaciencia_t \
                 and self.entre_primeros_cola_recurso(operacion.recurso) \
                 and self.entre_primeros_cola_medio_de_almacenamiento(medio_de_almacenamiento):
@@ -1215,26 +1214,41 @@ class Camion(object):
             sistema.exit(["No inicia", espera_r_a, espera_p_e, espera_m_a, espera_t])
 
     def espera_operacion(self, sistema, operacion):
+        """
+        Simula la espera por disponibilidad de:
+        - Recursos de atención
+        - Producto o espacio en sistema
+        - Capacidad de sistema disponible
 
+        :type sistema: Sistema
+        :type operacion: Operacion
+        """
         espera = 0
         while True:
             if self.entre_primeros_cola_recurso(operacion.recurso):
 
-                if self.manipulado.triggered or operacion.recurso.nombre == "Balanza 2":
+                if self.manipulado.triggered or operacion.recurso.nombre in ["Balanza 2", "Estacion Tolva/Balanza 3"]:
                     break
 
-                elif self.dispone_producto_espacio_sistema(sistema):
+                elif self.dispone_producto_espacio_sistema(sistema) \
+                        and len(sistema.camiones_en_sistema) <= sistema.capacidad_sistema:
                     break
 
                 else:
                     self.intenta_adelantar_camion_operacion(sistema, operacion)
-                    pass
+
             espera += 1
             yield sistema.timeout(1)
 
         yield sistema.process(self.espera_horario_atencion(sistema, operacion))
 
     def espera_horario_atencion(self, sistema, operacion):
+        """
+        Simula la espera de horarios de atención de los recursos.
+
+        :type sistema: Sistema
+        :type operacion: Operacion
+        """
 
         dia = round(sistema.now / (24 * 60) + 0.5)
         t_dia = sistema.now - 24 * 60 * (dia - 1)
@@ -1267,20 +1281,42 @@ class Camion(object):
                 yield sistema.timeout(espera_r_a_extra)
 
     def intenta_adelantar_camion_operacion(self, sistema, operacion):
+        """
+        Simula el intento de adelantar camiones por detras siempre que sea factible y conveniente
 
-        if any(c.dispone_producto_espacio_sistema(sistema) or c.manipulado.triggered
-               for c in operacion.recurso.cola_detras_de_camion(self)):
-            camion_adelantado = [c for c in operacion.recurso.cola_detras_de_camion(self)
-                                 if c.dispone_producto_espacio_sistema(sistema) or c.manipulado.triggered][0]
+        :type sistema: Sistema
+        :type operacion: Operacion
+        """
+        if not self.dispone_producto_espacio_sistema(sistema):
 
-            operacion.recurso.cola.remove(camion_adelantado)
-            operacion.recurso.cola = \
-                operacion.recurso.cola[0:operacion.recurso.cola.index(self)] \
-                + [camion_adelantado] + operacion.recurso.cola[operacion.recurso.cola.index(self):]
+            if any(c.dispone_producto_espacio_sistema(sistema) or c.manipulado.triggered
+                   for c in operacion.recurso.cola_detras_de_camion(self)):
+                camion_adelantado = [c for c in operacion.recurso.cola_detras_de_camion(self)
+                                     if c.dispone_producto_espacio_sistema(sistema) or c.manipulado.triggered][0]
 
-            print str(camion_adelantado) + " adelantado bajo criterio de " + str(self) + " " + str(sistema.now)
-            print "\t" + str(operacion.recurso.nombre) + ": " \
-                  + str(operacion.recurso.cola) + " Hora: " + str(sistema.now)
+                operacion.recurso.cola.remove(camion_adelantado)
+                operacion.recurso.cola = \
+                    operacion.recurso.cola[0:operacion.recurso.cola.index(self)] \
+                    + [camion_adelantado] + operacion.recurso.cola[operacion.recurso.cola.index(self):]
+
+                print str(camion_adelantado) + " adelantado bajo criterio de " + str(self) + " " + str(sistema.now)
+                print "\t" + str(operacion.recurso.nombre) + ": " \
+                      + str(operacion.recurso.cola) + " Hora: " + str(sistema.now)
+        else:
+
+            if any(c.manipulado.triggered
+                   for c in operacion.recurso.cola_detras_de_camion(self)):
+                camion_adelantado = [c for c in operacion.recurso.cola_detras_de_camion(self)
+                                     if c.manipulado.triggered][0]
+
+                operacion.recurso.cola.remove(camion_adelantado)
+                operacion.recurso.cola = \
+                    operacion.recurso.cola[0:operacion.recurso.cola.index(self)] \
+                    + [camion_adelantado] + operacion.recurso.cola[operacion.recurso.cola.index(self):]
+
+                print str(camion_adelantado) + " adelantado bajo criterio de " + str(self) + " " + str(sistema.now)
+                print "\t" + str(operacion.recurso.nombre) + ": " \
+                      + str(operacion.recurso.cola) + " Hora: " + str(sistema.now)
 
     def solicita_adelanto(self, sistema, operacion, medio_de_almacenamiento):
         """
@@ -1325,6 +1361,13 @@ class Camion(object):
                     sistema, operacion, medio_de_almacenamiento, self, "Almacen")
 
     def solicita_adelanto_operacion(self, sistema, operacion, medio_de_almacenamiento=None):
+        """
+        Permite la solicitud de adelanto cuando un camion arriba a una operacion
+
+        :type medio_de_almacenamiento: MedioDeAlmacenamiento
+        :type operacion: Operacion
+        :type sistema: Sistema
+        """
 
         primeros_cola_r_a = operacion.recurso.cola[0:operacion.recurso.capacity]
         primeros_cola_r_a_disponen_p_e_s_o_manip =\
@@ -1363,16 +1406,6 @@ class Camion(object):
 
             print str(camion) + " adelantado bajo criterio de " + str(self) + " " + str(entorno.now)
             print "\tEn sistema: " + str(operacion.recurso.cola) + " Hora: " + str(entorno.now)
-
-            # if self in medio_de_origen_o_destino.cola and camion in medio_de_origen_o_destino.cola:
-            #     medio_de_origen_o_destino.cola.remove(camion)
-            #     medio_de_origen_o_destino.cola = \
-            #         medio_de_origen_o_destino.cola[0:medio_de_origen_o_destino.cola.index(self)] + [camion] \
-            #         + medio_de_origen_o_destino.cola[medio_de_origen_o_destino.cola.index(self):]
-            #
-            #     print "NO BORRAR SI AUN SE LEE"
-            #     print "\t" + medio_de_origen_o_destino.nombre + ":" \
-            #           + str(medio_de_origen_o_destino.cola) + " Hora: " + str(entorno.now)
 
         elif tipo == "Almacen":
 
@@ -1440,6 +1473,7 @@ class Camion(object):
 
     def medios_almacenamiento_destino(self, sistema):
         """
+        Genera los medios de almacenamiento que puede usar el camion.
 
         :type sistema: Sistema
         """
@@ -1451,6 +1485,11 @@ class Camion(object):
         return medios_de_almacenamiento_destino
 
     def dispone_camion_esperando_camion(self, sistema):
+        """
+        Identifica si hay algún camion esperando por transbordo.
+
+        :type sistema: Sistema
+        """
 
         if self.tipo == "Carga":
             tipo_camion_en_espera = "Descarga"
@@ -1463,7 +1502,11 @@ class Camion(object):
             return False
 
     def dispone_producto_espacio_sistema(self, sistema):
+        """
+        Identifica si hay producto o espacio disponible en el sistema para atender al camion.
 
+        :type sistema: Sistema
+        """
         camiones_comparables_a_cargar = 0
         camiones_comparables_a_descargar = 0
 
@@ -1498,10 +1541,7 @@ class Camion(object):
                 producto_espacio_disponible += almacen.espacio
 
         if self.tipo == "Carga":
-            # if self.nombre == 52:
-            #     print str(camiones_comparables_a_descargar) + " " + str(camiones_comparables_a_cargar)
-            #     print sistema.camiones_en_sistema
-            #     print [not c.manipulado.triggered for c in sistema.camiones_en_sistema]
+
             if producto_espacio_disponible + 28 * (camiones_comparables_a_descargar - camiones_comparables_a_cargar) \
                     >= 28:
                 return True
@@ -1534,7 +1574,12 @@ class Camion(object):
         return prod_o_esp_dip
 
     def dispone_producto_espacio_y_entre_primeros_medios_almacenamiento(self, sistema):  # TODO revisar posibles bugs
+        """
+        Permite identificar si se dispone producto o espacio en algún medio de almacenamiento para atender al camion,
+        y si el mismo esta entre los primeros camiones a ser atendidos.
 
+        :type sistema: Sistema
+        """
         medios_de_almacenamiento = sistema.medios_almacenamiento.values()
         prod_o_esp_dip = False
 
@@ -1721,7 +1766,6 @@ class Operacion(object):
 
         arribo = sistema.now
 
-        # if self.nombre != "Primer pesaje - B3":
         self.recurso.cola.append(camion)
 
         if self.recurso.nombre == "Estacion Tolva/Balanza 3":
@@ -1913,6 +1957,11 @@ class Recurso(simpy.Resource):
         self.horario = horario
 
     def cola_detras_de_camion(self, camion):
+        """
+        Genera la cola detrás de un camión siempre que esté en la cola.
+
+        :type camion: Camion
+        """
 
         if camion in self.cola:
             return self.cola[self.cola.index(camion) + 1:]
@@ -1979,6 +2028,11 @@ class MedioDeAlmacenamiento(simpy.Container):
             print "****ERROR DESCARGA, ESPACIO NO DISPONIBLE**** " + str(camion)
 
     def cola_detras_de_camion(self, camion):
+        """
+        Genera la cola detrás de un camión siempre que esté en la cola.
+
+        :type camion: Camion
+        """
 
         if camion in self.cola:
             return self.cola[self.cola.index(camion) + 1:]
